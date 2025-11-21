@@ -1,2 +1,6 @@
 .env
-venv
+venv/
+__pycache__/
+users_data.json
+tasks_data.json
+user_files/
