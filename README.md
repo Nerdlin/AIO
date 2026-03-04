@@ -1,29 +1,30 @@
-﻿# AIO Telegram Bot
+﻿# AIO — Telegram-бот ассистент
 
-AIO is a Telegram assistant bot with registration, personal tasks, GPT chat, and secure user file storage.
+AIO — это Telegram-бот для личной продуктивности: регистрация, задачи с напоминаниями, GPT-диалог и безопасная работа с файлами.
 
-## Highlights
-- User registration and profile editing
-- Task scheduling with reminders (Asia/Almaty timezone)
-- Multi-turn GPT chat with history trimming and retry handling
-- Per-user file storage (`user_files/<user_id>/`)
-- Input validation for email/phone
-- State-safe cancel flow (`/cancel`)
+## Что умеет бот
+- Регистрация пользователя и хранение профиля
+- Просмотр и редактирование своих данных
+- Создание задач с напоминаниями по времени
+- Многошаговый GPT-чат с историей диалога
+- Загрузка и скачивание файлов
+- Отмена любого сценария через `/cancel`
 
-## Tech Stack
+## Ключевые особенности
+- Изоляция файлов по пользователям: `user_files/<user_id>/`
+- Санитизация имён файлов перед сохранением
+- Лимит на размер загружаемого файла
+- Устойчивая обработка ошибок GPT (retry/backoff)
+- Гибкий запуск: бот работает даже без `OPENAI_API_KEY` (GPT-чат будет отключён)
+
+## Технологии
 - Python 3.11+
 - aiogram 3
 - OpenAI Python SDK
 - python-dotenv
-- pytest (for utility tests)
+- pytest
 
-## Quick Start
-1. Clone repository.
-2. Create and activate virtual environment.
-3. Install dependencies.
-4. Create `.env` from `.env.example`.
-5. Run bot.
-
+## Быстрый старт
 ```bash
 python -m venv venv
 # Windows
@@ -32,54 +33,60 @@ pip install -r requirements.txt
 python AIO.py
 ```
 
-## Environment
-Use `.env.example` as template.
+## Настройка окружения
+Скопируйте `.env.example` в `.env` и заполните значения.
 
-| Variable | Required | Description |
+| Переменная | Обязательно | Назначение |
 |---|---|---|
-| `API_TOKEN` | Yes | Telegram bot token |
-| `OPENAI_API_KEY` | No | Enables GPT chat mode |
+| `API_TOKEN` | Да | Токен Telegram-бота |
+| `OPENAI_API_KEY` | Нет | Ключ OpenAI для GPT-чата |
 
-If `OPENAI_API_KEY` is missing, the bot still runs, but GPT chat returns a graceful "unavailable" message.
+Если `OPENAI_API_KEY` не задан, бот продолжит работать, но GPT-ответы будут недоступны.
 
-## Commands
-| Command | Purpose |
+## Команды
+| Команда | Назначение |
 |---|---|
-| `/start` | Open main menu |
-| `/help` | Show quick help |
-| `/cancel` | Exit current flow |
+| `/start` | Главное меню |
+| `/help` | Краткая справка |
+| `/cancel` | Прервать текущий сценарий |
 
-## Project Structure
+## Структура проекта
 ```text
 AIO/
-  AIO.py                  # Main bot runtime
-  app_utils.py            # Shared validators and safe path helpers
-  users_data.json         # User profile storage (runtime)
-  tasks_data.json         # Task storage (runtime)
-  user_files/             # Uploaded files, isolated per user
+  AIO.py                  # Главный файл бота
+  app_utils.py            # Валидации и безопасные файловые хелперы
+  users_data.json         # Хранилище профилей (runtime)
+  tasks_data.json         # Хранилище задач (runtime)
+  user_files/             # Файлы пользователей
   tests/
-    test_app_utils.py     # Unit tests for utility layer
+    test_app_utils.py     # Unit-тесты утилит
   requirements.txt
   requirements-dev.txt
   .env.example
 ```
 
-## Tests
+## Тесты
 ```bash
 pip install -r requirements-dev.txt
 pytest -q
 ```
 
-## Security Notes
-- Keep `.env` private.
-- Rotate leaked tokens immediately.
-- File names are sanitized before saving.
-- Uploads are bounded by size checks in runtime.
+## Пример сценария
+1. Пользователь запускает `/start`.
+2. Проходит регистрацию.
+3. Создаёт задачу в формате `YYYY-MM-DD HH:MM`.
+4. Получает напоминание в нужный момент.
+5. Заходит в GPT-чат и продолжает диалог в одном контексте.
 
-## Roadmap
-- Move storage from JSON to database (SQLite/PostgreSQL)
-- Add admin role and moderation tools
-- Add richer i18n support
+## Безопасность
+- Не коммитьте `.env` и токены в репозиторий.
+- Ротуйте ключи при утечке.
+- Используйте отдельный API-ключ OpenAI с лимитами.
 
-## License
+## Дальнейшее развитие
+- Перенос JSON-хранилищ в SQLite/PostgreSQL
+- Роли и админ-функции
+- Более глубокая аналитика задач
+
+## Лицензия
 MIT
