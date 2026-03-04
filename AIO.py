@@ -4,9 +4,9 @@ import os
 import re
 import asyncio
 import logging
-import random
-import string
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 import pytz
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import (Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup,
@@ -16,26 +16,32 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from openai import OpenAI
+from app_utils import (
+    generate_unique_code,
+    validate_email,
+    validate_phone,
+    sanitize_filename,
+    get_user_storage_dir,
+    resolve_user_file_path,
+)
 
 load_dotenv()
 
 API_TOKEN = os.getenv("API_TOKEN")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-if not API_TOKEN or not OPENAI_KEY:
-    raise RuntimeError("Отсутствует API_TOKEN или OPENAI_API_KEY в .env")
-client = OpenAI(api_key=OPENAI_KEY)
+client: Optional[OpenAI] = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=API_TOKEN)
+bot: Optional[Bot] = Bot(token=API_TOKEN) if API_TOKEN else None
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 DATA_FILE = 'users_data.json'
 TASKS_FILE = 'tasks_data.json'
-FILE_STORAGE_PATH = 'user_files'
-if not os.path.exists(FILE_STORAGE_PATH):
-    os.makedirs(FILE_STORAGE_PATH)
+FILE_STORAGE_PATH = Path('user_files')
+MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
+FILE_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
 
 almaty_tz = pytz.timezone('Asia/Almaty')
 
@@ -85,7 +91,7 @@ def load_user_data():
         with open(DATA_FILE, 'r', encoding='utf-8') as file:
             return json.load(file)
     except Exception as e:
-        print(f"Ошибка при загрузке данных: {str(e)}")
+        logging.exception("Ошибка при загрузке данных: %s", e)
         return {}
 
 def save_user_data(user_data):
@@ -93,28 +99,16 @@ def save_user_data(user_data):
         with open(DATA_FILE, 'w', encoding='utf-8') as file:
             json.dump(user_data, file, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"Ошибка при сохранении данных: {str(e)}")
+        logging.exception("Ошибка при сохранении данных: %s", e)
 
 def is_user_registered(user_id):
     all_user_data = load_user_data()
     return str(user_id) in all_user_data
 
-def generate_unique_code():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-def validate_email(email):
-    pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-    return re.match(pattern, email)
-
-def validate_phone(phone: str) -> bool:
-    return bool(re.fullmatch(r'\+?\d{10,15}', phone.strip()))
-
-def sanitize_filename(name: str) -> str:
-    if not name:
-        return "file"
-    name = os.path.basename(name)
-    name = re.sub(r'[^A-Za-zА-Яа-я0-9._-]', '_', name)
-    return name[:100]
+def get_bot() -> Bot:
+    if bot is None:
+        raise RuntimeError("Не задан API_TOKEN в .env")
+    return bot
 
 def clear_chat_history(user_id):
     conversation_history[user_id] = []
@@ -144,10 +138,10 @@ def load_tasks():
             data[uid] = converted
         return data
     except json.JSONDecodeError:
-        print("Файл задач поврежден, создаю пустой.")
+        logging.warning("Файл задач поврежден, создаю пустой.")
         return {}
     except Exception as e:
-        print(f"Ошибка загрузки задач: {e}")
+        logging.exception("Ошибка загрузки задач: %s", e)
         return {}
 
 def save_tasks():
@@ -158,7 +152,7 @@ def save_tasks():
         with open(TASKS_FILE, 'w', encoding='utf-8') as f:
             json.dump(serializable, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"Ошибка сохранения задач: {e}")
+        logging.exception("Ошибка сохранения задач: %s", e)
 
 async def save_tasks_async():
     async with TASKS_LOCK:
@@ -173,7 +167,7 @@ async def check_events():
             for event in list(events):
                 if event['date'] <= now:
                     try:
-                        await bot.send_message(int(user_id), f"Напоминание: '{event['name']}' наступило!")
+                        await get_bot().send_message(int(user_id), f"Напоминание: '{event['name']}' наступило!")
                     except Exception as e:
                         logging.warning(f"Не удалось отправить напоминание {user_id}: {e}")
                     events.remove(event)
@@ -335,10 +329,14 @@ async def prompt_file_upload(message: types.Message):
 @dp.message(F.document)
 async def handle_file_upload(message: types.Message):
     document = message.document
-    file_info = await bot.get_file(document.file_id)
+    if document.file_size and document.file_size > MAX_FILE_SIZE_BYTES:
+        max_size_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+        await message.answer(f"Файл слишком большой. Максимум: {max_size_mb} МБ.")
+        return
+    file_info = await get_bot().get_file(document.file_id)
     safe_name = sanitize_filename(document.file_name)
-    file_path = f"{FILE_STORAGE_PATH}/{safe_name}"
-    await bot.download(file_info, destination=file_path)
+    file_path = resolve_user_file_path(FILE_STORAGE_PATH, message.from_user.id, safe_name)
+    await get_bot().download(file_info, destination=file_path)
     await message.answer(f"Файл '{safe_name}' сохранён.")
 
 def create_file_keyboard(files):
@@ -351,17 +349,22 @@ def create_file_keyboard(files):
 @dp.callback_query(lambda c: c.data.startswith('download::'))
 async def send_file(callback_query: types.CallbackQuery):
     file_name = callback_query.data.split('::')[1]
-    file_path = f"{FILE_STORAGE_PATH}/{file_name}"
-    if os.path.exists(file_path):
+    try:
+        file_path = resolve_user_file_path(FILE_STORAGE_PATH, callback_query.from_user.id, file_name)
+    except ValueError:
+        await callback_query.message.answer("Некорректное имя файла.")
+        return
+    if file_path.exists():
         input_file = FSInputFile(file_path)
-        await bot.send_document(chat_id=callback_query.from_user.id, document=input_file)
+        await get_bot().send_document(chat_id=callback_query.from_user.id, document=input_file)
         await callback_query.answer()
     else:
         await callback_query.message.answer("Файл не найден.")
 
 @dp.message(F.text == "Файлы")
 async def list_user_files(message: types.Message):
-    files = os.listdir(FILE_STORAGE_PATH)
+    user_dir = get_user_storage_dir(FILE_STORAGE_PATH, message.from_user.id)
+    files = sorted([p.name for p in user_dir.iterdir() if p.is_file()])
     if files:
         kb = create_file_keyboard(files)
         await message.answer("Выбери файл:", reply_markup=kb)
@@ -384,6 +387,8 @@ async def trim_history(user_id: int):
     conversation_history[user_id] = history
 
 async def ask_gpt(user_id: int, user_input: str):
+    if client is None:
+        return "OPENAI_API_KEY не задан. GPT-чат недоступен."
     await trim_history(user_id)
     history = conversation_history.get(user_id, [])
     messages = history + [{"role": "user", "content": user_input}]
@@ -529,8 +534,15 @@ async def fallback_handler(message: types.Message, state: FSMContext):
     await message.answer("Не понял. Используй меню или /help.")
 
 async def main():
+    if not API_TOKEN:
+        raise RuntimeError("Отсутствует API_TOKEN в .env")
+    if not OPENAI_KEY:
+        logging.warning("OPENAI_API_KEY не найден. GPT-чат будет недоступен.")
+
     asyncio.create_task(check_events())
-    await dp.start_polling(bot)
+    await dp.start_polling(get_bot())
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
